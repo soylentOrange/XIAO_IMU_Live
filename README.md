@@ -24,7 +24,6 @@ Firmware and a browser app that read the 6-axis IMU (LSM6DS3TR-C) of the **Seeed
    - [Features](#features)
    - [Browser Support](#browser-support)
    - [Install on Android](#install-on-android)
-   - [Hosting on GitHub Pages](#hosting-on-github-pages)
 4. [Repository Layout](#repository-layout)
 5. [Acknowledgements & Funding](#acknowledgements--funding)
 6. [License](#license)
@@ -119,14 +118,6 @@ Web Bluetooth and Web Serial need a secure context: `https://` (e.g. GitHub Page
 1. Open the [web app](https://soylentorange.github.io/XIAO_IMU_Live/) in Chrome.
 2. Menu ⋮ → **Add to Home screen** → **Install**.
 3. Start "IMU live" from the home screen, tap **Connect Bluetooth** and choose `XIAO-IMU`. Android asks for the "Nearby devices" permission the first time.
-
-### Hosting on GitHub Pages
-
-1. On GitHub: **Settings → Pages**.
-2. Under **Build and deployment** choose **Deploy from a branch**, branch `main`, folder **`/docs`**, then **Save**.
-3. After a minute the app is available at `https://<user>.github.io/<repository>/`.
-
-When you change the app, increase `VERSION` in [`docs/sw.js`](docs/sw.js) so installed copies pick up the new files.
 
 ## Repository Layout
 
