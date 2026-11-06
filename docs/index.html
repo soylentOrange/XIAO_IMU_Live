@@ -171,7 +171,9 @@ function applyLang() {
 ["de", "en"].forEach(l => $("lang-" + l).onclick = () => { lang = l; localStorage.setItem("imuLang", l); applyLang(); });
 
 // USB-Seriell gibt es z. B. auf Android nicht -> Knopf ausblenden; Warnung nur, wenn gar nichts geht
-if (!("serial" in navigator)) $("connect").hidden = true;
+// Neuere Chrome-Versionen auf Android kennen navigator.serial, USB zum XIAO geht dort aber nicht
+const MOBILE = (navigator.userAgentData && navigator.userAgentData.mobile) || /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
+if (!("serial" in navigator) || MOBILE) $("connect").hidden = true;
 if (!("bluetooth" in navigator)) $("ble").disabled = true;
 if (!("serial" in navigator) && !("bluetooth" in navigator)) $("nows").hidden = false;
 // Offline-Fähigkeit / Installation als App (nur über http(s), nicht bei file://)
@@ -383,7 +385,7 @@ $("flip").onclick = () => { camYaw = (camYaw + 180) % 360; };
   c.addEventListener("pointermove", e => {
     if (!drag) return;
     camYaw = drag[2] + (e.clientX - drag[0]) * 0.5;
-    camElev = Math.max(-80, Math.min(80, drag[3] - (e.clientY - drag[1]) * 0.4));
+    camElev = Math.max(-80, Math.min(80, drag[3] + (e.clientY - drag[1]) * 0.4));
   });
   const end = () => { drag = null; c.style.cursor = "grab"; };
   c.addEventListener("pointerup", end); c.addEventListener("pointercancel", end);
