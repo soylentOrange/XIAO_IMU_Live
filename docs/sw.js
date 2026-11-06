@@ -1,5 +1,5 @@
 // Service Worker: hält die App offline verfügbar. Bei Änderungen an den Dateien VERSION erhöhen.
-const VERSION = "imu-live-v2";
+const VERSION = "imu-live-v3";
 const FILES = ["./", "index.html", "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png",
                "icons/icon-maskable-512.png", "icons/apple-touch-icon.png"];
 

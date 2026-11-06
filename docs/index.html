@@ -28,7 +28,7 @@
   button.primary { background: var(--z); color: #fff; border-color: var(--z); }
   button.rec { background: var(--x); color: #fff; border-color: var(--x); }
   button:disabled { opacity: .45; cursor: default; }
-  #status { color: var(--muted); }
+  #status { color: var(--muted); font-variant-numeric: tabular-nums; }
   main { padding: 0 16px 16px; display: grid; gap: 12px; }
   .card { background: var(--card); border: 1px solid var(--grid); border-radius: 8px; padding: 10px 12px; }
   .card h2 { font-size: 13px; font-weight: 600; margin: 0 0 4px; display: flex; gap: 14px; flex-wrap: wrap; }
@@ -45,7 +45,9 @@
   .logc { grid-column: 1 / -1; }
   @media (max-width: 900px) { main { grid-template-columns: 1fr; } .c3d { grid-column: 1; grid-row: auto; } }
   @media (max-width: 600px) {
-    header { padding: 10px 10px; gap: 8px; } h1 { flex-basis: 100%; }
+    header { padding: 10px 10px; gap: 8px; } h1 { flex: 1; order: 0; } .lang { order: 1; }
+    header > :not(h1):not(.lang) { order: 2; } .spacer { display: none; }
+    #status { order: 3; flex-basis: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     main { padding: 0 8px 8px; gap: 8px; } footer { padding: 0 10px 12px; }
     canvas { height: 190px; } .c3d canvas { height: 300px; }
     .card h2 { gap: 8px; }
@@ -577,10 +579,11 @@ function drawChart(canvas, cols, minSpan, colorVars = ["--x", "--y", "--z"], fro
     ctx.fillText((Math.abs(v) < 1e-9 ? 0 : +v.toFixed(3)).toString(), L - 6, y);
   }
   ctx.textAlign = "center"; ctx.textBaseline = "top";
-  for (let t = Math.ceil(tStart / 1000) * 1000; t <= tEnd; t += 1000) {
-    if ((win > 10000) && (t / 1000) % 5) continue;
-    ctx.fillText((t / 1000).toFixed(0) + " s", X(t), H - B + 4);
-  }
+  // Abstand der Zeitmarken so wählen, dass sich die Beschriftungen nicht überlappen (wichtig auf dem Handy)
+  const labelW = ctx.measureText((tEnd / 1000).toFixed(0) + " s").width + 14;
+  const tStep = [1, 2, 5, 10, 15, 30, 60, 120, 300].find(st => st * 1000 / win * pw >= labelW) || 600;
+  for (let t = Math.ceil(tStart / (tStep * 1000)) * tStep * 1000; t <= tEnd; t += tStep * 1000)
+    ctx.fillText((t / 1000).toFixed(0) + " s", Math.min(X(t), W - labelW / 2 + 6), H - B + 4);
 
   const colors = colorVars.map(css);
   ctx.lineWidth = 1.5; ctx.lineJoin = "round";
@@ -597,7 +600,7 @@ function frame() {
   if (now - rateT0 >= 1000) { rateHz = rateCount * 1000 / (now - rateT0); rateCount = 0; rateT0 = now; }
   if ((port || bleDev) && buf.length) {
     const rec = recording ? T("stRec", recording.length) : "";
-    setStatus(`${bleDev ? "Bluetooth" : "USB"} · ${rateHz.toFixed(0)} Hz${rec}`);
+    setStatus(`${bleDev ? "Bluetooth" : "USB"} · ${rateHz.toFixed(0).padStart(3, "\u2007")} Hz${rec}`);
   }
   if (!paused) {
     drawChart($("acc"), [1, 2, 3, 7], 0.5, ["--x", "--y", "--z", "--m"]);
