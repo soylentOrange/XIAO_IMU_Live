@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>XIAO IMU live</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #fafaf8; --fg: #1d1d1b; --muted: #6b6b66; --grid: #e4e4df; --card: #fff;
+    --x: #d1495b; --y: #2e8b57; --z: #2f6fbd;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161615; --fg: #ececea; --muted: #9a9a94; --grid: #2c2c2a; --card: #1f1f1d;
+            --x: #ef7585; --y: #5cc28a; --z: #6aa4ea; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         background: var(--bg); color: var(--fg); }
+  header { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 12px 16px; }
+  h1 { font-size: 16px; margin: 0 12px 0 0; }
+  button, select { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--grid);
+                   background: var(--card); color: var(--fg); cursor: pointer; }
+  button.primary { background: var(--z); color: #fff; border-color: var(--z); }
+  button.rec { background: var(--x); color: #fff; border-color: var(--x); }
+  button:disabled { opacity: .45; cursor: default; }
+  #status { color: var(--muted); }
+  main { padding: 0 16px 16px; display: grid; gap: 12px; }
+  .card { background: var(--card); border: 1px solid var(--grid); border-radius: 8px; padding: 10px 12px; }
+  .card h2 { font-size: 13px; font-weight: 600; margin: 0 0 4px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .card h2 span { font-weight: 400; font-variant-numeric: tabular-nums; }
+  canvas { width: 100%; height: 260px; display: block; }
+  .sx { color: var(--x); } .sy { color: var(--y); } .sz { color: var(--z); }
+  #log { font: 12px ui-monospace, Menlo, monospace; color: var(--muted); white-space: pre-wrap;
+         max-height: 5.5em; overflow: auto; }
+  .warn { padding: 12px 16px; color: var(--x); }
+</style>
+</head>
+<body>
+<header>
+  <h1>XIAO nRF54L15 IMU live</h1>
+  <button id="connect" class="primary">Verbinden</button>
+  <button id="record" disabled>Aufnahme starten</button>
+  <label>Fenster
+    <select id="window">
+      <option value="5">5 s</option><option value="10" selected>10 s</option><option value="30">30 s</option>
+    </select>
+  </label>
+  <button id="pause" disabled>Pause</button>
+  <span id="status">nicht verbunden</span>
+</header>
+<div id="nows" class="warn" hidden>
+  Dieser Browser kann nicht auf serielle Schnittstellen zugreifen. Bitte die Datei in Chrome oder Edge öffnen.
+</div>
+<main>
+  <div class="card">
+    <h2>Beschleunigung (g)
+      <span class="sx">x <b id="vax">–</b></span><span class="sy">y <b id="vay">–</b></span><span class="sz">z <b id="vaz">–</b></span>
+    </h2>
+    <canvas id="acc"></canvas>
+  </div>
+  <div class="card">
+    <h2>Drehrate (°/s)
+      <span class="sx">x <b id="vgx">–</b></span><span class="sy">y <b id="vgy">–</b></span><span class="sz">z <b id="vgz">–</b></span>
+    </h2>
+    <canvas id="gyr"></canvas>
+  </div>
+  <div class="card"><div id="log"></div></div>
+</main>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const MAXPTS = 30 * 250;          // Puffer für bis zu 30 s bei 250 Hz
+const buf = [];                   // [t_ms, ax, ay, az, gx, gy, gz]
+let port = null, reader = null, keepReading = false, paused = false;
+let recording = null;             // Array von Zeilen oder null
+let rateCount = 0, rateT0 = performance.now(), rateHz = 0;
+
+if (!("serial" in navigator)) { $("nows").hidden = false; $("connect").disabled = true; }
+
+function log(msg) {
+  const el = $("log");
+  el.textContent += msg + "\n";
+  const lines = el.textContent.split("\n");
+  if (lines.length > 30) el.textContent = lines.slice(-30).join("\n");
+  el.scrollTop = el.scrollHeight;
+}
+function setStatus(s) { $("status").textContent = s; }
+
+$("connect").onclick = async () => {
+  if (port) { await disconnect(); return; }
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+  } catch (e) { port = null; log("Verbindung fehlgeschlagen: " + e.message); return; }
+  $("connect").textContent = "Trennen";
+  $("record").disabled = false; $("pause").disabled = false;
+  setStatus("verbunden, warte auf Daten …");
+  readLoop();
+};
+
+async function disconnect() {
+  keepReading = false;
+  try { if (reader) await reader.cancel(); } catch (e) {}
+  try { await port.close(); } catch (e) {}
+  port = null; reader = null;
+  $("connect").textContent = "Verbinden";
+  $("pause").disabled = true;
+  setStatus("nicht verbunden");
+}
+
+async function readLoop() {
+  keepReading = true;
+  const decoder = new TextDecoder();
+  let rest = "";
+  while (port && port.readable && keepReading) {
+    reader = port.readable.getReader();
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        rest += decoder.decode(value, { stream: true });
+        let i;
+        while ((i = rest.indexOf("\n")) >= 0) {
+          handleLine(rest.slice(0, i).trim());
+          rest = rest.slice(i + 1);
+        }
+      }
+    } catch (e) {
+      log("Lesefehler: " + e.message);
+      break;
+    } finally {
+      reader.releaseLock();
+    }
+  }
+  if (port) await disconnect();
+}
+
+function handleLine(line) {
+  if (!line) return;
+  if (line.startsWith("#")) { log(line); return; }
+  const p = line.split(",");
+  if (p.length !== 7) return;
+  const v = p.map(Number);
+  if (v.some(Number.isNaN)) return;
+  if (buf.length && v[0] < buf[buf.length - 1][0]) buf.length = 0;   // Board neu gestartet
+  buf.push(v);
+  if (buf.length > MAXPTS) buf.splice(0, buf.length - MAXPTS);
+  if (recording) recording.push(line);
+  rateCount++;
+}
+
+$("pause").onclick = () => { paused = !paused; $("pause").textContent = paused ? "Weiter" : "Pause"; };
+
+$("record").onclick = () => {
+  if (!recording) {
+    recording = [];
+    $("record").textContent = "Aufnahme stoppen";
+    $("record").classList.add("rec");
+  } else {
+    const csv = "t_ms,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps\n" + recording.join("\n") + "\n";
+    const n = recording.length;
+    recording = null;
+    $("record").textContent = "Aufnahme starten";
+    $("record").classList.remove("rec");
+    const ts = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    a.download = `imu_${ts}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    log(`# ${n} Messungen gespeichert als ${a.download}`);
+  }
+};
+
+// ---------- Zeichnen ----------
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+function niceStep(range) {
+  const raw = range / 5, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const f = raw / mag;
+  return (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * mag;
+}
+
+function drawChart(canvas, cols, minSpan) {
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  if (canvas.width !== W * dpr || canvas.height !== H * dpr) { canvas.width = W * dpr; canvas.height = H * dpr; }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  const L = 48, R = 8, T = 6, B = 20, pw = W - L - R, ph = H - T - B;
+  const win = Number($("window").value) * 1000;
+  const tEnd = buf.length ? buf[buf.length - 1][0] : win, tStart = tEnd - win;
+  let s = buf.length - 1;
+  while (s > 0 && buf[s - 1][0] >= tStart) s--;
+  const pts = buf.slice(Math.max(s, 0));
+
+  let lo = Infinity, hi = -Infinity;
+  for (const p of pts) for (const c of cols) { lo = Math.min(lo, p[c]); hi = Math.max(hi, p[c]); }
+  if (!isFinite(lo)) { lo = -minSpan; hi = minSpan; }
+  const mid = (lo + hi) / 2, span = Math.max(hi - lo, minSpan) * 1.1;
+  lo = mid - span / 2; hi = mid + span / 2;
+  const X = t => L + (t - tStart) / win * pw;
+  const Y = v => T + (hi - v) / (hi - lo) * ph;
+
+  ctx.font = "11px -apple-system, sans-serif";
+  ctx.fillStyle = css("--muted"); ctx.strokeStyle = css("--grid"); ctx.lineWidth = 1;
+  const step = niceStep(hi - lo);
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) {
+    const y = Math.round(Y(v)) + .5;
+    ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(W - R, y); ctx.stroke();
+    ctx.fillText((Math.abs(v) < 1e-9 ? 0 : +v.toFixed(3)).toString(), L - 6, y);
+  }
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  for (let t = Math.ceil(tStart / 1000) * 1000; t <= tEnd; t += 1000) {
+    if ((win > 10000) && (t / 1000) % 5) continue;
+    ctx.fillText((t / 1000).toFixed(0) + " s", X(t), H - B + 4);
+  }
+
+  const colors = [css("--x"), css("--y"), css("--z")];
+  ctx.lineWidth = 1.5; ctx.lineJoin = "round";
+  cols.forEach((c, k) => {
+    ctx.strokeStyle = colors[k];
+    ctx.beginPath();
+    pts.forEach((p, i) => i ? ctx.lineTo(X(p[0]), Y(p[c])) : ctx.moveTo(X(p[0]), Y(p[c])));
+    ctx.stroke();
+  });
+}
+
+function frame() {
+  const now = performance.now();
+  if (now - rateT0 >= 1000) { rateHz = rateCount * 1000 / (now - rateT0); rateCount = 0; rateT0 = now; }
+  if (port && buf.length) {
+    const rec = recording ? ` · Aufnahme: ${recording.length} Messungen` : "";
+    setStatus(`verbunden · ${rateHz.toFixed(0)} Hz${rec}`);
+  }
+  if (!paused) {
+    drawChart($("acc"), [1, 2, 3], 0.5);
+    drawChart($("gyr"), [4, 5, 6], 20);
+    const last = buf[buf.length - 1];
+    if (last) {
+      ["vax", "vay", "vaz"].forEach((id, i) => $(id).textContent = last[1 + i].toFixed(2));
+      ["vgx", "vgy", "vgz"].forEach((id, i) => $(id).textContent = last[4 + i].toFixed(0));
+    }
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
