@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>XIAO IMU live</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f2a24">
+<meta name="description" content="Live view of the IMU on the Seeed XIAO nRF54L15 Sense via Bluetooth LE or USB serial">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<style>
+  :root {
+    --bg: #fafaf8; --fg: #1d1d1b; --muted: #6b6b66; --grid: #e4e4df; --card: #fff;
+    --x: #d1495b; --y: #2e8b57; --z: #2f6fbd; --m: #7a4fb5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161615; --fg: #ececea; --muted: #9a9a94; --grid: #2c2c2a; --card: #1f1f1d;
+            --x: #ef7585; --y: #5cc28a; --z: #6aa4ea; --m: #b48cf0; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         background: var(--bg); color: var(--fg); }
+  header { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 12px 16px; }
+  h1 { font-size: 16px; margin: 0 12px 0 0; }
+  button, select { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--grid);
+                   background: var(--card); color: var(--fg); cursor: pointer; }
+  button.primary { background: var(--z); color: #fff; border-color: var(--z); }
+  button.rec { background: var(--x); color: #fff; border-color: var(--x); }
+  button:disabled { opacity: .45; cursor: default; }
+  #status { color: var(--muted); }
+  main { padding: 0 16px 16px; display: grid; gap: 12px; }
+  .card { background: var(--card); border: 1px solid var(--grid); border-radius: 8px; padding: 10px 12px; }
+  .card h2 { font-size: 13px; font-weight: 600; margin: 0 0 4px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .card h2 span { font-weight: 400; }
+  .card h2 b { font: 600 13px ui-monospace, Menlo, monospace; white-space: pre; display: inline-block; text-align: right; }
+  canvas { width: 100%; height: 260px; display: block; }
+  main { grid-template-columns: minmax(0, 1fr) 380px; }
+  .c3d { grid-column: 2; grid-row: 1 / span 2; }
+  .c3d canvas { height: 380px; touch-action: none; }
+  .c3d h2 { align-items: center; justify-content: space-between; }
+  .c3d button { padding: 2px 10px; font-size: 12px; font-weight: 400; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .hint b { font: 600 12px ui-monospace, Menlo, monospace; white-space: pre; }
+  .logc { grid-column: 1 / -1; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } .c3d { grid-column: 1; grid-row: auto; } }
+  @media (max-width: 600px) {
+    header { padding: 10px 10px; gap: 8px; } h1 { flex-basis: 100%; }
+    main { padding: 0 8px 8px; gap: 8px; } footer { padding: 0 10px 12px; }
+    canvas { height: 190px; } .c3d canvas { height: 300px; }
+    .card h2 { gap: 8px; }
+  }
+  footer .logos { display: flex; gap: 20px; align-items: center; margin-top: 8px; }
+  footer .logos img { height: 40px; }
+  .sm { color: var(--m); }
+  .sx { color: var(--x); } .sy { color: var(--y); } .sz { color: var(--z); }
+  #log { font: 12px ui-monospace, Menlo, monospace; color: var(--muted); white-space: pre-wrap;
+         max-height: 5.5em; overflow: auto; }
+  .warn { padding: 12px 16px; color: var(--x); }
+  .spacer { flex: 1; }
+  .lang button { padding: 4px 8px; font-size: 12px; }
+  .lang button:first-child { border-radius: 6px 0 0 6px; } .lang button:last-child { border-radius: 0 6px 6px 0; border-left: 0; }
+  .lang button.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  footer { padding: 0 16px 16px; font-size: 12px; color: var(--muted); }
+  footer a { color: var(--z); }
+</style>
+</head>
+<body>
+<header>
+  <h1>XIAO nRF54L15 IMU live</h1>
+  <button id="connect" class="primary"></button>
+  <button id="ble" class="primary"></button>
+  <button id="record" disabled></button>
+  <label><span data-i18n="window"></span>
+    <select id="window">
+      <option value="5">5 s</option><option value="10" selected>10 s</option><option value="30">30 s</option>
+    </select>
+  </label>
+  <button id="pause" disabled></button>
+  <span id="status"></span>
+  <span class="spacer"></span>
+  <span class="lang"><button id="lang-de">DE</button><button id="lang-en">EN</button></span>
+</header>
+<div id="nows" class="warn" hidden data-i18n="nows"></div>
+<main>
+  <div class="card">
+    <h2><span data-i18n="acc"></span>
+      <span class="sx">x <b id="vax">–</b></span><span class="sy">y <b id="vay">–</b></span><span class="sz">z <b id="vaz">–</b></span><span class="sm">|a| <b id="vam">–</b></span>
+    </h2>
+    <canvas id="acc"></canvas>
+  </div>
+  <div class="card c3d">
+    <h2><span data-i18n="orient"></span> <span><button id="flip" data-i18n="flip" data-i18n-title="flipT"></button>
+      <button id="zero" data-i18n="zero" data-i18n-title="zeroT"></button></span></h2>
+    <canvas id="view3d"></canvas>
+    <div class="hint">Roll <b id="vroll">–</b>° · Pitch <b id="vpitch">–</b>° · Yaw <b id="vyaw">–</b>°<br>
+      <span data-i18n="hint1"></span><br>
+      <span data-i18n="hint2"></span></div>
+  </div>
+  <div class="card">
+    <h2><span data-i18n="gyr"></span>
+      <span class="sx">x <b id="vgx">–</b></span><span class="sy">y <b id="vgy">–</b></span><span class="sz">z <b id="vgz">–</b></span><span class="sm">|ω| <b id="vgm">–</b></span>
+    </h2>
+    <canvas id="gyr"></canvas>
+  </div>
+  <div class="card logc"><div id="log"></div></div>
+</main>
+<footer><span data-i18n="project"></span> <a href="https://horizon-smile.eu/" target="_blank" rel="noopener">SmILE – Smart Implants for Life Enrichment</a>.
+  <div class="logos"><a href="https://horizon-smile.eu/" target="_blank" rel="noopener"><img src="assets/Smile-logo.svg" alt="SmILE"></a>
+    <img src="assets/eu-funded.svg" alt="Funded by the European Union"></div></footer>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const MAXPTS = 30 * 250;          // Puffer für bis zu 30 s bei 250 Hz
+const buf = [];                   // [t_ms, ax, ay, az, gx, gy, gz]
+let port = null, reader = null, keepReading = false, paused = false;
+let recording = null;             // Array von Zeilen oder null
+let rateCount = 0, rateT0 = performance.now(), rateHz = 0;
+
+// ---------- Sprache (DE / EN) ----------
+const TEXT = {
+  de: {
+    window: "Fenster", nows: "Dieser Browser kann weder auf Bluetooth noch auf USB-Seriell zugreifen. Bitte Chrome oder Edge verwenden (am PC/Mac oder auf Android), die Seite über https öffnen, oder in Brave Web Bluetooth aktivieren.",
+    acc: "Beschleunigung (g)", gyr: "Drehrate (°/s)", orient: "Lage des Boards",
+    flip: "Ansicht 180°", flipT: "Kamera auf die andere Seite stellen",
+    zero: "Nullen", zeroT: "Lage und Gyro-Offset zurücksetzen (Board dabei ruhig halten)",
+    hint1: "Ansicht mit Maus oder Finger ziehen zum Drehen. Yaw driftet langsam (kein Magnetometer).",
+    hint2: "Board ruhig hinlegen, USB-Buchse von dir weg, dann „Nullen“: Das Modell steht dann so wie vor dir.",
+    project: "Gefördert von der Europäischen Union im Programm Horizon Europe (Grant Agreement Nr. 101136376), Projekt",
+    usbOn: "USB verbinden", usbOff: "USB trennen", bleOn: "Bluetooth verbinden", bleOff: "Bluetooth trennen",
+    recOn: "Aufnahme starten", recOff: "Aufnahme stoppen", pause: "Pause", resume: "Weiter",
+    stIdle: "nicht verbunden", stWait: "verbunden, warte auf Daten …", stBle: "verbinde per Bluetooth …",
+    stRec: n => ` · Aufnahme: ${n} Messungen`,
+    logBleOff: "# Bluetooth getrennt", logBleOn: n => "# Bluetooth verbunden: " + n, logBleErr: m => "Bluetooth-Fehler: " + m,
+    logBrave: "Brave: brave://flags/#brave-web-bluetooth-api auf \"Enabled\" stellen und Brave neu starten.",
+    logConnErr: m => "Verbindung fehlgeschlagen: " + m, logReadErr: m => "Lesefehler: " + m,
+    logSaved: (n, f) => `# ${n} Messungen gespeichert als ${f}`, logZero: b => `# Genullt, Gyro-Offset ${b} °/s`,
+  },
+  en: {
+    window: "Window", nows: "This browser can access neither Bluetooth nor USB serial. Please use Chrome or Edge (desktop or Android), open the page via https, or enable Web Bluetooth in Brave.",
+    acc: "Acceleration (g)", gyr: "Angular rate (°/s)", orient: "Board orientation",
+    flip: "View 180°", flipT: "Move the camera to the other side",
+    zero: "Zero", zeroT: "Reset orientation and gyro offset (keep the board still)",
+    hint1: "Drag with mouse or finger to rotate the view. Yaw drifts slowly (no magnetometer).",
+    hint2: "Place the board still, USB socket pointing away from you, then press “Zero”: the model then matches the board in front of you.",
+    project: "Funded by the European Union's Horizon Europe programme (grant agreement No. 101136376), project",
+    usbOn: "Connect USB", usbOff: "Disconnect USB", bleOn: "Connect Bluetooth", bleOff: "Disconnect Bluetooth",
+    recOn: "Start recording", recOff: "Stop recording", pause: "Pause", resume: "Resume",
+    stIdle: "not connected", stWait: "connected, waiting for data …", stBle: "connecting via Bluetooth …",
+    stRec: n => ` · Recording: ${n} samples`,
+    logBleOff: "# Bluetooth disconnected", logBleOn: n => "# Bluetooth connected: " + n, logBleErr: m => "Bluetooth error: " + m,
+    logBrave: "Brave: set brave://flags/#brave-web-bluetooth-api to \"Enabled\" and restart Brave.",
+    logConnErr: m => "Connection failed: " + m, logReadErr: m => "Read error: " + m,
+    logSaved: (n, f) => `# ${n} samples saved as ${f}`, logZero: b => `# Zeroed, gyro offset ${b} °/s`,
+  },
+};
+let lang = localStorage.getItem("imuLang") || ((navigator.language || "de").startsWith("de") ? "de" : "en");
+let statusKey = "stIdle";
+const T = (k, ...a) => { const v = TEXT[lang][k]; return typeof v === "function" ? v(...a) : v; };
+function applyLang() {
+  document.documentElement.lang = lang;
+  document.querySelectorAll("[data-i18n]").forEach(el => el.textContent = T(el.dataset.i18n));
+  document.querySelectorAll("[data-i18n-title]").forEach(el => el.title = T(el.dataset.i18nTitle));
+  $("connect").textContent = T(port ? "usbOff" : "usbOn");
+  $("ble").textContent = T(bleDev ? "bleOff" : "bleOn");
+  $("record").textContent = T(recording ? "recOff" : "recOn");
+  $("pause").textContent = T(paused ? "resume" : "pause");
+  if (statusKey) $("status").textContent = T(statusKey);
+  $("lang-de").classList.toggle("on", lang === "de"); $("lang-en").classList.toggle("on", lang === "en");
+}
+["de", "en"].forEach(l => $("lang-" + l).onclick = () => { lang = l; localStorage.setItem("imuLang", l); applyLang(); });
+
+// USB-Seriell gibt es z. B. auf Android nicht -> Knopf ausblenden; Warnung nur, wenn gar nichts geht
+if (!("serial" in navigator)) $("connect").hidden = true;
+if (!("bluetooth" in navigator)) $("ble").disabled = true;
+if (!("serial" in navigator) && !("bluetooth" in navigator)) $("nows").hidden = false;
+// Offline-Fähigkeit / Installation als App (nur über http(s), nicht bei file://)
+if ("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("sw.js");
+
+// ---------- Bluetooth LE ----------
+const IMU_SVC = "7a1e0001-5c3b-4f0a-9d2e-3c8f1b6a4d01";
+const IMU_DATA = "7a1e0002-5c3b-4f0a-9d2e-3c8f1b6a4d01";
+const SAMPLE_MS = 10;
+let bleDev = null;
+
+$("ble").onclick = async () => {
+  if (bleDev) { bleDev.gatt.disconnect(); return; }
+  try {
+    bleDev = await navigator.bluetooth.requestDevice({ filters: [{ services: [IMU_SVC] }] });
+    bleDev.addEventListener("gattserverdisconnected", () => {
+      log(T("logBleOff")); bleDev = null;
+      $("ble").textContent = T("bleOn"); setStatus("stIdle");
+    });
+    setStatus("stBle");
+    const server = await bleDev.gatt.connect();
+    const ch = await (await server.getPrimaryService(IMU_SVC)).getCharacteristic(IMU_DATA);
+    ch.addEventListener("characteristicvaluechanged", e => handlePacket(e.target.value));
+    await ch.startNotifications();
+    $("ble").textContent = T("bleOff");
+    $("record").disabled = false; $("pause").disabled = false;
+    log(T("logBleOn", bleDev.name || "XIAO-IMU"));
+  } catch (e) {
+    log(T("logBleErr", e.message));
+    if (/globally disabled/i.test(e.message))
+      log(T("logBrave"));
+    if (bleDev && bleDev.gatt.connected) bleDev.gatt.disconnect();
+    bleDev = null;
+  }
+};
+
+function handlePacket(dv) {
+  if (dv.byteLength < 5) return;
+  const t0 = dv.getUint32(0, true), n = dv.getUint8(4);
+  for (let i = 0; i < n && 5 + (i + 1) * 12 <= dv.byteLength; i++) {
+    const o = 5 + i * 12, g = k => dv.getInt16(o + 2 * k, true);
+    const v = [t0 + i * SAMPLE_MS, g(0) / 1000, g(1) / 1000, g(2) / 1000, g(3) / 10, g(4) / 10, g(5) / 10];
+    handleLine(v[0] + "," + v.slice(1, 4).map(x => x.toFixed(3)).join(",") + "," +
+               v.slice(4).map(x => x.toFixed(1)).join(","));
+  }
+}
+
+function log(msg) {
+  const el = $("log");
+  el.textContent += msg + "\n";
+  const lines = el.textContent.split("\n");
+  if (lines.length > 30) el.textContent = lines.slice(-30).join("\n");
+  el.scrollTop = el.scrollHeight;
+}
+// Status: Schlüssel aus TEXT (bleibt beim Sprachwechsel gültig) oder fertiger Text
+function setStatus(s) { statusKey = TEXT[lang][s] ? s : null; $("status").textContent = statusKey ? T(s) : s; }
+
+$("connect").onclick = async () => {
+  if (port) { await disconnect(); return; }
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+  } catch (e) { port = null; log(T("logConnErr", e.message)); return; }
+  $("connect").textContent = T("usbOff");
+  $("record").disabled = false; $("pause").disabled = false;
+  setStatus("stWait");
+  readLoop();
+};
+
+async function disconnect() {
+  keepReading = false;
+  try { if (reader) await reader.cancel(); } catch (e) {}
+  try { await port.close(); } catch (e) {}
+  port = null; reader = null;
+  $("connect").textContent = T("usbOn");
+  $("pause").disabled = true;
+  setStatus("stIdle");
+}
+
+async function readLoop() {
+  keepReading = true;
+  const decoder = new TextDecoder();
+  let rest = "";
+  while (port && port.readable && keepReading) {
+    reader = port.readable.getReader();
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        rest += decoder.decode(value, { stream: true });
+        let i;
+        while ((i = rest.indexOf("\n")) >= 0) {
+          handleLine(rest.slice(0, i).trim());
+          rest = rest.slice(i + 1);
+        }
+      }
+    } catch (e) {
+      log(T("logReadErr", e.message));
+      break;
+    } finally {
+      reader.releaseLock();
+    }
+  }
+  if (port) await disconnect();
+}
+
+function handleLine(line) {
+  if (!line) return;
+  if (line.startsWith("#")) { log(line); return; }
+  const p = line.split(",");
+  if (p.length !== 7) return;
+  const v = p.map(Number);
+  if (v.some(Number.isNaN)) return;
+  v.push(Math.hypot(v[1], v[2], v[3]), Math.hypot(v[4], v[5], v[6]));   // |a|, |ω|
+  ahrsUpdate(v);
+  if (buf.length && v[0] < buf[buf.length - 1][0]) buf.length = 0;   // Board neu gestartet
+  buf.push(v);
+  if (buf.length > MAXPTS) buf.splice(0, buf.length - MAXPTS);
+  if (recording) recording.push(line);
+  rateCount++;
+}
+
+$("pause").onclick = () => { paused = !paused; $("pause").textContent = T(paused ? "resume" : "pause"); };
+
+$("record").onclick = () => {
+  if (!recording) {
+    recording = [];
+    $("record").textContent = T("recOff");
+    $("record").classList.add("rec");
+  } else {
+    const csv = "t_ms,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps\n" + recording.join("\n") + "\n";
+    const n = recording.length;
+    recording = null;
+    $("record").textContent = T("recOn");
+    $("record").classList.remove("rec");
+    const ts = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    a.download = `imu_${ts}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    log(T("logSaved", n, a.download));
+  }
+};
+
+// feste Breite für Live-Werte: feste Nachkommastellen, links mit Leerzeichen aufgefüllt
+const fmt = (x, dec, width) => {
+  let t = x.toFixed(dec);
+  if (Number(t) === 0) t = (0).toFixed(dec);   // kein "-0.00"
+  return t.padStart(width, " ");
+};
+
+// ---------- Lage (Madgwick-Filter, nur Accel + Gyro) ----------
+let q = [1, 0, 0, 0];             // Quaternion Board -> Welt (w, x, y, z)
+let gyroBias = [0, 0, 0], lastT = null, ahrsInit = false;
+const BETA = 0.08;                // Vertrauen in den Beschleunigungssensor
+const D2R = Math.PI / 180;
+
+function ahrsInitFromAccel(ax, ay, az) {
+  // Startlage aus der Schwerkraft (Yaw = 0)
+  const roll = Math.atan2(ay, az), pitch = Math.atan2(-ax, Math.hypot(ay, az));
+  const cr = Math.cos(roll / 2), sr = Math.sin(roll / 2), cp = Math.cos(pitch / 2), sp = Math.sin(pitch / 2);
+  q = [cr * cp, sr * cp, cr * sp, -sr * sp];
+}
+
+// Vorzeichen der Drehraten (falls eine Achse gegenüber dem Beschleunigungssensor vertauscht wäre)
+const GYRO_SIGN = [1, 1, 1];
+
+function ahrsUpdate(v) {
+  const t = v[0];
+  let ax = v[1], ay = v[2], az = v[3];
+  if (!ahrsInit) { if (Math.hypot(ax, ay, az) > 0.5) { ahrsInitFromAccel(ax, ay, az); ahrsInit = true; } lastT = t; return; }
+  let dt = (t - lastT) / 1000; lastT = t;
+  if (!(dt > 0) || dt > 0.2) return;
+  const gx = GYRO_SIGN[0] * (v[4] - gyroBias[0]) * D2R, gy = GYRO_SIGN[1] * (v[5] - gyroBias[1]) * D2R,
+        gz = GYRO_SIGN[2] * (v[6] - gyroBias[2]) * D2R;
+  let [q0, q1, q2, q3] = q;
+  let qd0 = 0.5 * (-q1 * gx - q2 * gy - q3 * gz);
+  let qd1 = 0.5 * ( q0 * gx + q2 * gz - q3 * gy);
+  let qd2 = 0.5 * ( q0 * gy - q1 * gz + q3 * gx);
+  let qd3 = 0.5 * ( q0 * gz + q1 * gy - q2 * gx);
+  const an = Math.hypot(ax, ay, az);
+  // Korrektur nur, wenn die Beschleunigung nahe 1 g ist (sonst stört Bewegung)
+  if (an > 0.7 && an < 1.3) {
+    ax /= an; ay /= an; az /= an;
+    const _2q0 = 2 * q0, _2q1 = 2 * q1, _2q2 = 2 * q2, _2q3 = 2 * q3;
+    const _4q0 = 4 * q0, _4q1 = 4 * q1, _4q2 = 4 * q2, _8q1 = 8 * q1, _8q2 = 8 * q2;
+    const q0q0 = q0 * q0, q1q1 = q1 * q1, q2q2 = q2 * q2, q3q3 = q3 * q3;
+    let s0 = _4q0 * q2q2 + _2q2 * ax + _4q0 * q1q1 - _2q1 * ay;
+    let s1 = _4q1 * q3q3 - _2q3 * ax + 4 * q0q0 * q1 - _2q0 * ay - _4q1 + _8q1 * q1q1 + _8q1 * q2q2 + _4q1 * az;
+    let s2 = 4 * q0q0 * q2 + _2q0 * ax + _4q2 * q3q3 - _2q3 * ay - _4q2 + _8q2 * q1q1 + _8q2 * q2q2 + _4q2 * az;
+    let s3 = 4 * q1q1 * q3 - _2q1 * ax + 4 * q2q2 * q3 - _2q2 * ay;
+    const sn = Math.hypot(s0, s1, s2, s3);
+    if (sn > 0) { qd0 -= BETA * s0 / sn; qd1 -= BETA * s1 / sn; qd2 -= BETA * s2 / sn; qd3 -= BETA * s3 / sn; }
+  }
+  q0 += qd0 * dt; q1 += qd1 * dt; q2 += qd2 * dt; q3 += qd3 * dt;
+  const n = Math.hypot(q0, q1, q2, q3);
+  q = [q0 / n, q1 / n, q2 / n, q3 / n];
+}
+
+// Kamera: per Maus ziehen drehen, Button für 180°
+let camYaw = 180, camElev = 30;   // nach „Nullen“ zeigt die USB-Buchse vom Betrachter weg
+$("flip").onclick = () => { camYaw = (camYaw + 180) % 360; };
+{
+  let drag = null;
+  const c = $("view3d");
+  c.style.cursor = "grab";
+  c.addEventListener("pointerdown", e => { drag = [e.clientX, e.clientY, camYaw, camElev]; c.setPointerCapture(e.pointerId); c.style.cursor = "grabbing"; });
+  c.addEventListener("pointermove", e => {
+    if (!drag) return;
+    camYaw = drag[2] + (e.clientX - drag[0]) * 0.5;
+    camElev = Math.max(-80, Math.min(80, drag[3] - (e.clientY - drag[1]) * 0.4));
+  });
+  const end = () => { drag = null; c.style.cursor = "grab"; };
+  c.addEventListener("pointerup", end); c.addEventListener("pointercancel", end);
+}
+
+$("zero").onclick = () => {
+  // Gyro-Offset aus der letzten Sekunde, Lage neu aus der Schwerkraft
+  const recent = buf.slice(-100);
+  if (recent.length) for (let i = 0; i < 3; i++) gyroBias[i] = recent.reduce((s, p) => s + p[4 + i], 0) / recent.length;
+  ahrsInit = false;
+  log(T("logZero", gyroBias.map(b => b.toFixed(2)).join(" / ")));
+};
+
+function rotate(p) {               // Vektor vom Board- ins Weltsystem drehen
+  const [w, x, y, z] = q, [px, py, pz] = p;
+  return [
+    (1 - 2 * (y * y + z * z)) * px + 2 * (x * y - w * z) * py + 2 * (x * z + w * y) * pz,
+    2 * (x * y + w * z) * px + (1 - 2 * (x * x + z * z)) * py + 2 * (y * z - w * x) * pz,
+    2 * (x * z - w * y) * px + 2 * (y * z + w * x) * py + (1 - 2 * (x * x + y * y)) * pz,
+  ];
+}
+
+function draw3d() {
+  const canvas = $("view3d"), dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  if (canvas.width !== W * dpr || canvas.height !== H * dpr) { canvas.width = W * dpr; canvas.height = H * dpr; }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  // Kamera: schräg von vorne oben, Welt-z zeigt nach oben
+  const yaw = camYaw * D2R, elev = camElev * D2R, dist = 6, f = Math.min(W, H) * 1.6;
+  const proj = ([x, y, z]) => {
+    const x1 = x * Math.cos(yaw) - y * Math.sin(yaw), y1 = x * Math.sin(yaw) + y * Math.cos(yaw);
+    const depth = y1 * Math.cos(elev) - z * Math.sin(elev);
+    const up = y1 * Math.sin(elev) + z * Math.cos(elev);
+    const s = f / (dist + depth);
+    return [W / 2 + x1 * s, H / 2 - up * s, depth];
+  };
+  const camDepth = ([x, y, z]) => (x * Math.sin(yaw) + y * Math.cos(yaw)) * Math.cos(elev) - z * Math.sin(elev);
+  const line = (a, b, color, width = 1, dash = []) => {
+    const [x1, y1] = proj(a), [x2, y2] = proj(b);
+    ctx.strokeStyle = color; ctx.lineWidth = width; ctx.setLineDash(dash);
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); ctx.setLineDash([]);
+  };
+  const label = (p, text, color) => { const [x, y] = proj(p); ctx.fillStyle = color; ctx.fillText(text, x + 3, y - 3); };
+  ctx.font = "12px -apple-system, sans-serif";
+  const cx = css("--x"), cy = css("--y"), cz = css("--z"), grid = css("--grid"), muted = css("--muted");
+
+  // Bodengitter und Weltachsen (gestrichelt)
+  for (let i = -2; i <= 2; i++) { line([i * 0.5, -1, -0.8], [i * 0.5, 1, -0.8], grid); line([-1, i * 0.5, -0.8], [1, i * 0.5, -0.8], grid); }
+  line([0, 0, 0], [1.4, 0, 0], cx, 1, [4, 4]); label([1.4, 0, 0], "X", muted);
+  line([0, 0, 0], [0, 1.4, 0], cy, 1, [4, 4]); label([0, 1.4, 0], "Y", muted);
+  line([0, 0, 0], [0, 0, 1.4], cz, 1, [4, 4]); label([0, 0, 1.4], "Z", muted);
+
+  drawBoard(proj, rotate, camDepth, ctx);
+
+  // Board-Achsen (durchgezogen)
+  line([0, 0, 0], rotate([1.1, 0, 0]), cx, 3); label(rotate([1.1, 0, 0]), "x", cx);
+  line([0, 0, 0], rotate([0, 1.1, 0]), cy, 3); label(rotate([0, 1.1, 0]), "y", cy);
+  line([0, 0, 0], rotate([0, 0, 1.1]), cz, 3); label(rotate([0, 0, 1.1]), "z", cz);
+
+  // Euler-Winkel zur Anzeige
+  const [w, x, y, z] = q;
+  const roll = Math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y)) / D2R;
+  const pitch = Math.asin(Math.max(-1, Math.min(1, 2 * (w * y - z * x)))) / D2R;
+  const yawE = Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)) / D2R;
+  $("vroll").textContent = fmt(roll, 0, 4); $("vpitch").textContent = fmt(pitch, 0, 4); $("vyaw").textContent = fmt(yawE, 0, 4);
+}
+
+// ---------- Board-Modell ----------
+// Vereinfachtes XIAO-Modell aus Quadern (Maße in mm, abgeleitet aus dem Seeed-STEP-Modell).
+// Board-Koordinaten: x nach rechts, y Richtung USB-Buchse, z aus der Bauteilseite heraus.
+const BOARD_BOXES = [["pad",-8.02,7.56,0.78,1.73,1.63,0.04],["pad",-8.02,7.56,-0.77,1.73,1.63,0.04],["pad",-8.02,5.02,0.78,1.73,1.63,0.04],["pad",-8.02,5.02,-0.77,1.73,1.63,0.04],["pad",-8.02,2.48,0.78,1.73,1.63,0.04],["pad",-8.02,2.48,-0.77,1.73,1.63,0.04],["pad",-8.02,-0.06,0.78,1.73,1.63,0.04],["pad",-8.02,-0.06,-0.77,1.73,1.63,0.04],["pad",-8.02,-2.6,0.78,1.73,1.63,0.04],["pad",-8.02,-2.6,-0.77,1.73,1.63,0.04],["pad",-8.02,-5.14,0.78,1.73,1.63,0.04],["pad",-8.02,-5.14,-0.77,1.73,1.63,0.04],["pad",-8.02,-7.68,0.78,1.73,1.63,0.04],["pad",-8.02,-7.68,-0.77,1.73,1.63,0.04],["pad",8.03,-7.68,0.78,1.72,1.63,0.04],["pad",8.03,-7.68,-0.77,1.72,1.63,0.04],["pad",8.03,-5.14,0.78,1.72,1.63,0.04],["pad",8.03,-5.14,-0.77,1.72,1.63,0.04],["pad",8.03,-2.6,0.78,1.72,1.63,0.04],["pad",8.03,-2.6,-0.77,1.72,1.63,0.04],["pad",8.03,-0.06,0.78,1.72,1.63,0.04],["pad",8.03,-0.06,-0.77,1.72,1.63,0.04],["pad",8.03,2.48,0.78,1.72,1.63,0.04],["pad",8.03,2.48,-0.77,1.72,1.63,0.04],["pad",8.03,5.02,0.78,1.72,1.63,0.04],["pad",8.03,5.02,-0.77,1.72,1.63,0.04],["pad",8.03,7.56,0.78,1.72,1.63,0.04],["pad",8.03,7.56,-0.77,1.72,1.63,0.04],["pad",1.04,-4.99,-0.77,1.02,2.03,0.04],["pad",5.05,-3.82,-0.77,1.6,1.6,0.04],["pad",-5.12,-3.82,-0.77,1.6,1.6,0.04],["pad",-4.27,-9.31,-0.77,1.02,2.03,0.04],["pad",5.05,1.26,-0.77,1.6,1.6,0.04],["pad",-5.04,3.8,-0.77,1.6,1.6,0.04],["pad",-5.11,1.26,-0.77,1.6,1.6,0.04],["pad",5.05,3.8,-0.77,1.6,1.6,0.04],["pad",5.05,-1.28,-0.77,1.6,1.6,0.04],["pad",-5.01,-1.33,-0.77,1.6,1.6,0.04],["pad",-0.96,-4.99,-0.77,1.02,2.03,0.04],["pad",-5.77,-9.31,-0.77,1.02,2.03,0.04],["pcb",-0.0,0.0,-0.0,17.78,20.96,1.51],["usb",0.05,9.16,2.34,8.94,7.3,3.2],["shield",0.12,0.47,1.75,13.43,8.42,2.0],["button",-4.56,-5.48,1.53,3.04,2.43,1.56],["shield",0.12,0.47,2.76,13.15,8.14,0.01],["part",-2.2,-7.58,0.86,1.11,0.68,0.21],["part",0.17,-5.44,1.06,3.98,1.89,0.63],["pad",-4.24,-8.89,1.02,1.77,1.74,0.53],["button",4.54,-5.48,1.53,2.94,2.43,1.56],["antenna",1.24,-9.06,1.24,0.51,2.08,0.98],["led",-6.12,9.35,0.86,0.58,1.21,0.21],["led",6.33,9.34,0.86,0.55,1.01,0.21],["antenna",3.64,-9.06,1.24,4.28,2.08,0.98],["antenna",6.04,-9.06,1.24,0.52,2.08,0.98]];
+const BOARD_COLORS = { pcb: "#1f2a24", pad: "#c9a227", usb: "#b8bcc2", usbhole: "#202326", shield: "#c4c8cc",
+                       button: "#3a3a3a", antenna: "#e8e2d0", led: "#f0f0f0", part: "#555" };
+// Zuordnung Board -> Sensorachsen (Zeilen = Sensor x, y, z), aus einer Testaufnahme bestimmt:
+// +z zeigt aus der Bauteilseite, +y zeigt von der USB-Buchse weg, +x (von oben, USB oben) nach links.
+const BOARD_TO_SENSOR = [[-1, 0, 0], [0, -1, 0], [0, 0, 1]];
+const MM = 1 / 12;                // mm -> Darstellungseinheiten
+const toSensor = b => BOARD_TO_SENSOR.map(r => (r[0] * b[0] + r[1] * b[1] + r[2] * b[2]) * MM);
+
+function shade(hex, f) {
+  const n = parseInt(hex.slice(1), 16), c = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  return `rgb(${c.map(v => Math.round(Math.min(255, v * f))).join(",")})`;
+}
+
+function drawBoard(proj, rotate, camDepth, ctx) {
+  // Quader: 6 Flächen (Ecken in Board-mm, Normale)
+  const boxFaces = (cx, cy, cz, sx, sy, sz) => {
+    const c = (i, j, k) => [cx + i * sx / 2, cy + j * sy / 2, cz + k * sz / 2];
+    return [
+      [[c(-1,-1,-1), c(-1,1,-1), c(-1,1,1), c(-1,-1,1)], [-1, 0, 0]],
+      [[c(1,-1,-1), c(1,-1,1), c(1,1,1), c(1,1,-1)], [1, 0, 0]],
+      [[c(-1,-1,-1), c(-1,-1,1), c(1,-1,1), c(1,-1,-1)], [0, -1, 0]],
+      [[c(-1,1,-1), c(1,1,-1), c(1,1,1), c(-1,1,1)], [0, 1, 0]],
+      [[c(-1,-1,-1), c(1,-1,-1), c(1,1,-1), c(-1,1,-1)], [0, 0, -1]],
+      [[c(-1,-1,1), c(-1,1,1), c(1,1,1), c(1,-1,1)], [0, 0, 1]]];
+  };
+  // USB-C-Buchse: Stadion-Querschnitt (x-z), entlang y extrudiert
+  const stadium = (cx, cz, w, h, N = 10) => {
+    const r = h / 2, P = [];
+    for (let i = 0; i <= N; i++) { const a = -Math.PI / 2 + Math.PI * i / N; P.push([cx + (w / 2 - r) + r * Math.cos(a), cz + r * Math.sin(a)]); }
+    for (let i = 0; i <= N; i++) { const a = Math.PI / 2 + Math.PI * i / N; P.push([cx - (w / 2 - r) + r * Math.cos(a), cz + r * Math.sin(a)]); }
+    return P;   // gegen den Uhrzeigersinn in (x, z)
+  };
+  const usbFaces = (cx, cy, cz, sx, sy, sz) => {
+    const P = stadium(cx, cz, sx, sz), y0 = cy - sy / 2, y1 = cy + sy / 2, F = [];
+    for (let i = 0; i < P.length; i++) {
+      const p = P[i], q = P[(i + 1) % P.length];
+      const nx = q[1] - p[1], nz = -(q[0] - p[0]), l = Math.hypot(nx, nz);
+      F.push([[[p[0], y0, p[1]], [q[0], y0, q[1]], [q[0], y1, q[1]], [p[0], y1, p[1]]], [nx / l, 0, nz / l]]);
+    }
+    F.push([P.map(p => [p[0], y1, p[1]]), [0, 1, 0]]);
+    F.push([P.map(p => [p[0], y0, p[1]]).reverse(), [0, -1, 0]]);
+    // Steckeröffnung (dunkel), knapp vor der Stirnfläche
+    F.push([stadium(cx, cz, sx - 0.9, sz - 0.9).map(p => [p[0], y1 + 0.02, p[1]]), [0, 1, 0], "usbhole"]);
+    return F;
+  };
+  const items = BOARD_BOXES.map(([kind, cx, cy, cz, sx, sy, sz]) => {
+    const F = (kind === "usb" ? usbFaces : boxFaces)(cx, cy, cz, sx, sy, sz).map(([pts, n, k]) => {
+      const nw = rotate(toSensor(n));
+      return { P: pts.map(v => proj(rotate(toSensor(v)))), nw, kind: k || kind };
+    });
+    return { kind, cz, F, depth: camDepth(rotate(toSensor([cx, cy, cz]))) };
+  });
+  const drawItem = it => {
+    for (const f of it.F) {
+      if (camDepth(f.nw) >= 0) continue;                  // Rückseite
+      const light = 0.55 + 0.45 * Math.max(0, f.nw[2]);   // Licht von oben
+      ctx.beginPath(); f.P.forEach((p, k) => k ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
+      const col = shade(BOARD_COLORS[f.kind] || "#777", light);
+      ctx.closePath(); ctx.fillStyle = col; ctx.fill();
+      if (it.kind === "usb" && f.P.length === 4) { ctx.strokeStyle = col; ctx.lineWidth = 0.8; }   // runde Mantelfläche ohne Nähte
+      else { ctx.strokeStyle = "rgba(0,0,0,0.25)"; ctx.lineWidth = 0.5; }
+      ctx.stroke();
+    }
+  };
+  // Was auf der abgewandten Seite der Platine liegt, zuerst; dann Platine; dann die sichtbare Seite
+  const topVisible = camDepth(rotate(toSensor([0, 0, 1]))) < 0;
+  const pcb = items.filter(i => i.kind === "pcb");
+  const others = items.filter(i => i.kind !== "pcb").sort((a, b) => b.depth - a.depth);
+  const hidden = others.filter(i => (i.cz > 0) !== topVisible), visible = others.filter(i => (i.cz > 0) === topVisible);
+  hidden.forEach(drawItem); pcb.forEach(drawItem); visible.forEach(drawItem);
+}
+
+// ---------- Zeichnen ----------
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+function niceStep(range) {
+  const raw = range / 5, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const f = raw / mag;
+  return (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * mag;
+}
+
+function drawChart(canvas, cols, minSpan, colorVars = ["--x", "--y", "--z"], fromZero = false) {
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  if (canvas.width !== W * dpr || canvas.height !== H * dpr) { canvas.width = W * dpr; canvas.height = H * dpr; }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  const L = 48, R = 8, T = 6, B = 20, pw = W - L - R, ph = H - T - B;
+  const win = Number($("window").value) * 1000;
+  const tEnd = buf.length ? buf[buf.length - 1][0] : win, tStart = tEnd - win;
+  let s = buf.length - 1;
+  while (s > 0 && buf[s - 1][0] >= tStart) s--;
+  const pts = buf.slice(Math.max(s, 0));
+
+  let lo = Infinity, hi = -Infinity;
+  for (const p of pts) for (const c of cols) { lo = Math.min(lo, p[c]); hi = Math.max(hi, p[c]); }
+  if (!isFinite(lo)) { lo = -minSpan; hi = minSpan; }
+  if (fromZero) { lo = 0; hi = Math.max(hi, minSpan) * 1.1; }
+  else {
+    const mid = (lo + hi) / 2, span = Math.max(hi - lo, minSpan) * 1.1;
+    lo = mid - span / 2; hi = mid + span / 2;
+  }
+  const X = t => L + (t - tStart) / win * pw;
+  const Y = v => T + (hi - v) / (hi - lo) * ph;
+
+  ctx.font = "11px -apple-system, sans-serif";
+  ctx.fillStyle = css("--muted"); ctx.strokeStyle = css("--grid"); ctx.lineWidth = 1;
+  const step = niceStep(hi - lo);
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) {
+    const y = Math.round(Y(v)) + .5;
+    ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(W - R, y); ctx.stroke();
+    ctx.fillText((Math.abs(v) < 1e-9 ? 0 : +v.toFixed(3)).toString(), L - 6, y);
+  }
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  for (let t = Math.ceil(tStart / 1000) * 1000; t <= tEnd; t += 1000) {
+    if ((win > 10000) && (t / 1000) % 5) continue;
+    ctx.fillText((t / 1000).toFixed(0) + " s", X(t), H - B + 4);
+  }
+
+  const colors = colorVars.map(css);
+  ctx.lineWidth = 1.5; ctx.lineJoin = "round";
+  cols.forEach((c, k) => {
+    ctx.strokeStyle = colors[k];
+    ctx.beginPath();
+    pts.forEach((p, i) => i ? ctx.lineTo(X(p[0]), Y(p[c])) : ctx.moveTo(X(p[0]), Y(p[c])));
+    ctx.stroke();
+  });
+}
+
+function frame() {
+  const now = performance.now();
+  if (now - rateT0 >= 1000) { rateHz = rateCount * 1000 / (now - rateT0); rateCount = 0; rateT0 = now; }
+  if ((port || bleDev) && buf.length) {
+    const rec = recording ? T("stRec", recording.length) : "";
+    setStatus(`${bleDev ? "Bluetooth" : "USB"} · ${rateHz.toFixed(0)} Hz${rec}`);
+  }
+  if (!paused) {
+    drawChart($("acc"), [1, 2, 3, 7], 0.5, ["--x", "--y", "--z", "--m"]);
+    drawChart($("gyr"), [4, 5, 6, 8], 20, ["--x", "--y", "--z", "--m"]);
+    draw3d();
+    const last = buf[buf.length - 1];
+    if (last) {
+      ["vax", "vay", "vaz"].forEach((id, i) => $(id).textContent = fmt(last[1 + i], 2, 6));
+      ["vgx", "vgy", "vgz"].forEach((id, i) => $(id).textContent = fmt(last[4 + i], 0, 5));
+      $("vam").textContent = fmt(last[7], 2, 6);
+      $("vgm").textContent = fmt(last[8], 0, 5);
+    }
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+applyLang();
+</script>
+</body>
+</html>
